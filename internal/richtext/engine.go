@@ -515,13 +515,16 @@ func externalURL(value, host string) (string, error) {
 		return "", errors.New("missing host label")
 	}
 	label := name[strings.LastIndex(name, ".")+1:]
-	if !regexp.MustCompile(`[a-zA-Z]`).MatchString(label) || strings.HasPrefix(strings.ToLower(label), "0x") || strings.EqualFold(name, strings.TrimSuffix(host, ".")) {
+	if !alphaPattern.MatchString(label) || strings.HasPrefix(strings.ToLower(label), "0x") || strings.EqualFold(name, strings.TrimSuffix(host, ".")) {
 		return "", nil
 	}
 	return value, nil
 }
 
-var opengraphType = regexp.MustCompile(`application/vnd.actiontext.opengraph-embed`)
+var (
+	alphaPattern  = regexp.MustCompile(`[a-zA-Z]`)
+	opengraphType = regexp.MustCompile(`application/vnd.actiontext.opengraph-embed`)
+)
 
 func embedHTML(n *xhtml.Node, ctx Context) (string, error) {
 	href, src, title, description := attr(n, "href"), attr(n, "url"), attr(n, "filename"), attr(n, "caption")

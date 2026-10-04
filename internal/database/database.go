@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -20,14 +21,21 @@ var schema string
 
 var migrations = []string{"20231215043540", "20231220143106", "20240110071740", "20240115124901", "20240130003150", "20240130213001", "20240131105830", "20240209110503", "20250825100957", "20250825100958", "20250825100959", "20251126092013", "20251126115722", "20251126130131", "20251212154340"}
 
+type accountCacheEntry struct {
+	gen     uint64
+	account *Account
+}
+
 // A single writer prevents pool starvation while WAL readers proceed independently.
 type DB struct {
 	ResetConnections    func(int64)
 	PurgeBlobs          func([]int64)
 	RemoveBannedContent func(int64)
+	AfterAccountQuery   func()
 	Read                *readPool
 	Write               *sql.DB
 	Now                 func() time.Time
+	accountCache        atomic.Pointer[accountCacheEntry]
 }
 
 func Open(path string, readers int) (*DB, error) {
@@ -140,6 +148,54 @@ func prepare(db *sql.DB) error {
 	return tx.Commit()
 }
 
+var timestampLayouts = []string{"2006-01-02 15:04:05.999999999", "2006-01-02 15:04:05.999999999-07:00", time.RFC3339Nano}
+
+func parseSQLiteTimestamp(raw string) (time.Time, bool) {
+	if len(raw) < 19 || raw[4] != '-' || raw[7] != '-' || (raw[10] != ' ' && raw[10] != 'T') || raw[13] != ':' || raw[16] != ':' {
+		return time.Time{}, false
+	}
+	y0, y1, y2, y3 := raw[0]-'0', raw[1]-'0', raw[2]-'0', raw[3]-'0'
+	m0, m1 := raw[5]-'0', raw[6]-'0'
+	d0, d1 := raw[8]-'0', raw[9]-'0'
+	h0, h1 := raw[11]-'0', raw[12]-'0'
+	min0, min1 := raw[14]-'0', raw[15]-'0'
+	s0, s1 := raw[17]-'0', raw[18]-'0'
+	if y0 > 9 || y1 > 9 || y2 > 9 || y3 > 9 ||
+		m0 > 9 || m1 > 9 || d0 > 9 || d1 > 9 ||
+		h0 > 9 || h1 > 9 || min0 > 9 || min1 > 9 ||
+		s0 > 9 || s1 > 9 {
+		return time.Time{}, false
+	}
+	year := int(y0)*1000 + int(y1)*100 + int(y2)*10 + int(y3)
+	month := int(m0)*10 + int(m1)
+	day := int(d0)*10 + int(d1)
+	hour := int(h0)*10 + int(h1)
+	min := int(min0)*10 + int(min1)
+	sec := int(s0)*10 + int(s1)
+	if month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || min > 59 || sec > 59 {
+		return time.Time{}, false
+	}
+	nsec := 0
+	rem := raw[19:]
+	if len(rem) > 0 && rem[0] == '.' {
+		rem = rem[1:]
+		mul := 100000000
+		i := 0
+		for i < len(rem) && rem[i] >= '0' && rem[i] <= '9' {
+			if mul > 0 {
+				nsec += int(rem[i]-'0') * mul
+				mul /= 10
+			}
+			i++
+		}
+		rem = rem[i:]
+	}
+	if len(rem) > 0 && rem != "Z" && rem != "+00:00" && rem != "-00:00" {
+		return time.Time{}, false
+	}
+	return time.Date(year, time.Month(month), day, hour, min, sec, nsec, time.UTC), true
+}
+
 // SQLite's DATETIME(6) declaration is returned as text by go-sqlite3.
 type timestamp struct{ value *time.Time }
 
@@ -157,7 +213,11 @@ func (t timestamp) Scan(value any) error {
 	default:
 		return fmt.Errorf("invalid timestamp type %T", value)
 	}
-	for _, layout := range []string{"2006-01-02 15:04:05.999999999", "2006-01-02 15:04:05.999999999-07:00", time.RFC3339Nano} {
+	if parsed, ok := parseSQLiteTimestamp(raw); ok {
+		*t.value = parsed
+		return nil
+	}
+	for _, layout := range timestampLayouts {
 		if parsed, err := time.Parse(layout, raw); err == nil {
 			*t.value = parsed
 			return nil

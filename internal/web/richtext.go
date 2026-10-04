@@ -22,7 +22,7 @@ func (s *Server) mention(u database.User) richtext.Mention {
 	if strings.TrimSpace(u.Bio) != "" {
 		title += " – " + u.Bio
 	}
-	return richtext.Mention{ID: u.ID, Name: u.Name, Title: title, SGID: s.Secrets.SGID(fmt.Sprintf("gid://campfire/User/%d?expires_in", u.ID), "attachable", time.Time{}), Path: fmt.Sprintf("/users/%d", u.ID), Avatar: "/users/" + s.Secrets.SignedID("User", u.ID, "avatar", time.Time{}) + "/avatar?v=" + u.UpdatedAt.UTC().Format("20060102150405")}
+	return richtext.Mention{ID: u.ID, Name: u.Name, Title: title, SGID: s.Secrets.SGID(fmt.Sprintf("gid://campfire/User/%d?expires_in", u.ID), "attachable", time.Time{}), Path: fmt.Sprintf("/users/%d", u.ID), Avatar: "/users/" + s.Secrets.AvatarToken(u.ID) + "/avatar?v=" + u.UpdatedAt.UTC().Format("20060102150405")}
 }
 func (s *Server) richContext(ctx context.Context) richtext.Context {
 	host, _ := ctx.Value(requestHostKey{}).(string)

@@ -15,6 +15,7 @@ import (
 	"errors"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,12 +24,13 @@ var ErrInvalid = errors.New("invalid signed or encrypted message")
 // Secrets are derived once at boot, as in reference/crates/rails_compat/src/cookies.rs.
 // Rails derives with SHA256 but signs cookies with SHA1.
 type Secrets struct {
-	secret     string
-	signing    []byte
-	signedIDs  []byte
-	signedGIDs []byte
-	streams    []byte
-	encryption cipher.AEAD
+	secret       string
+	signing      []byte
+	signedIDs    []byte
+	signedGIDs   []byte
+	streams      []byte
+	encryption   cipher.AEAD
+	avatarTokens sync.Map
 }
 
 func DeriveKey(secret, salt string, length int) []byte {

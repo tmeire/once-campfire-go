@@ -294,16 +294,33 @@ func marshalString(data []byte) (string, bool) {
 	}
 	return string(data[:length]), true
 }
+
+var (
+	modelCamel1 = regexp.MustCompile(`([A-Z]+)([A-Z][a-z])`)
+	modelCamel2 = regexp.MustCompile(`([a-z0-9])([A-Z])`)
+	gidPattern  = regexp.MustCompile(`gid://campfire/[^/]+/\d+`)
+)
+
 func modelPurpose(model, purpose string) string {
 	model = strings.ReplaceAll(model, "::", "/")
-	model = regexp.MustCompile(`([A-Z]+)([A-Z][a-z])`).ReplaceAllString(model, "${1}_${2}")
-	model = regexp.MustCompile(`([a-z0-9])([A-Z])`).ReplaceAllString(model, "${1}_${2}")
+	model = modelCamel1.ReplaceAllString(model, "${1}_${2}")
+	model = modelCamel2.ReplaceAllString(model, "${1}_${2}")
 	model = strings.ToLower(strings.ReplaceAll(model, "-", "_"))
 	if strings.TrimSpace(purpose) != "" {
 		model += "/" + purpose
 	}
 	return model
 }
+
+func (s *Secrets) AvatarToken(id int64) string {
+	if v, ok := s.avatarTokens.Load(id); ok {
+		return v.(string)
+	}
+	token := s.SignedID("User", id, "avatar", time.Time{})
+	s.avatarTokens.Store(id, token)
+	return token
+}
+
 func (s *Secrets) SignedID(model string, id int64, purpose string, expires time.Time) string {
 	value, err := s.idVerifier().Generate(id, modelPurpose(model, purpose), expires)
 	if err != nil {
@@ -399,7 +416,7 @@ func UnverifiedUserGID(sgid string) (string, error) {
 		if err != nil {
 			return "", ErrInvalid
 		}
-		gid = regexp.MustCompile(`gid://campfire/[^/]+/\d+`).FindString(string(decoded))
+		gid = gidPattern.FindString(string(decoded))
 	}
 	if !strings.HasPrefix(gid, "gid://") {
 		decoded, err := decode64(gid)

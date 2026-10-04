@@ -1,9 +1,9 @@
 package web
 
 import (
-	"crypto/sha256"
-	"fmt"
-	"strings"
+	"encoding/hex"
+	"hash"
+	"strconv"
 
 	"github.com/basecamp/once-campfire-go/internal/database"
 )
@@ -11,22 +11,59 @@ import (
 // Key every value the sidebar template reads. Authorization and membership data
 // are still read afresh before looking up the rendered fragment.
 func sidebarCacheKey(p page) string {
-	var key strings.Builder
+	h := sha256Pool.Get().(hash.Hash)
+	h.Reset()
+	defer sha256Pool.Put(h)
+
+	var buf [64]byte
 	user := func(u database.User) {
-		fmt.Fprintf(&key, "u%d/%d/%d:%s/", u.ID, u.UpdatedAt.UnixMicro(), len(u.Name), u.Name)
+		b := append(buf[:0], 'u')
+		b = strconv.AppendInt(b, u.ID, 10)
+		b = append(b, '/')
+		b = strconv.AppendInt(b, u.UpdatedAt.UnixMicro(), 10)
+		b = append(b, '/')
+		b = strconv.AppendInt(b, int64(len(u.Name)), 10)
+		b = append(b, ':')
+		h.Write(b)
+		h.Write([]byte(u.Name))
+		h.Write([]byte{'/'})
 	}
 	user(p.User)
-	fmt.Fprintf(&key, "%t/%s/%s/", p.CanCreateRooms, p.RoomsStream, p.UserRoomsStream)
+	b := strconv.AppendBool(buf[:0], p.CanCreateRooms)
+	b = append(b, '/')
+	h.Write(b)
+	h.Write([]byte(p.RoomsStream))
+	h.Write([]byte{'/'})
+	h.Write([]byte(p.UserRoomsStream))
+	h.Write([]byte{'/'})
 	for _, room := range p.SidebarRooms {
-		fmt.Fprintf(&key, "r%d/%d/%t/%d:%s/%d:%s/", room.ID, room.UpdatedAt.UnixMicro(), room.Unread, len(room.Type), room.Type, len(room.Name), room.Name)
+		b := append(buf[:0], 'r')
+		b = strconv.AppendInt(b, room.ID, 10)
+		b = append(b, '/')
+		b = strconv.AppendInt(b, room.UpdatedAt.UnixMicro(), 10)
+		b = append(b, '/')
+		b = strconv.AppendBool(b, room.Unread)
+		b = append(b, '/')
+		b = strconv.AppendInt(b, int64(len(room.Type)), 10)
+		b = append(b, ':')
+		h.Write(b)
+		h.Write([]byte(room.Type))
+		b = append(buf[:0], '/')
+		b = strconv.AppendInt(b, int64(len(room.Name)), 10)
+		b = append(b, ':')
+		h.Write(b)
+		h.Write([]byte(room.Name))
+		h.Write([]byte{'/'})
 		for _, member := range room.Members {
 			user(member)
 		}
-		key.WriteByte(';')
+		h.Write([]byte{';'})
 	}
-	key.WriteByte('|')
+	h.Write([]byte{'|'})
 	for _, member := range p.Placeholders {
 		user(member)
 	}
-	return fmt.Sprintf("sidebar/%x", sha256.Sum256([]byte(key.String())))
+	var digest [32]byte
+	h.Sum(digest[:0])
+	return "sidebar/" + hex.EncodeToString(digest[:])
 }

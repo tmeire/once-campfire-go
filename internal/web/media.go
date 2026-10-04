@@ -157,5 +157,6 @@ func (s *Server) deleteLogo(w http.ResponseWriter, r *http.Request, u database.U
 		s.fail(w, err)
 		return
 	}
+	s.DB.InvalidateAccount()
 	http.Redirect(w, r, "/account/edit", 302)
 }

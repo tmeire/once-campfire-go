@@ -74,6 +74,12 @@ func (d *DB) UserByEmail(ctx context.Context, email string) (User, error) {
 func (d *DB) SessionUser(ctx context.Context, token string) (User, error) {
 	return userRow(d.Read.QueryRowContext(ctx, "SELECT "+userColumns+" FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token=? AND u.status=0", token))
 }
+func (d *DB) SessionUserWithActive(ctx context.Context, token string) (User, time.Time, error) {
+	var u User
+	var active time.Time
+	err := d.Read.QueryRowContext(ctx, "SELECT "+userColumns+",s.last_active_at FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token=? AND u.status=0", token).Scan(&u.ID, &u.Name, &u.Email, &u.Password, &u.Role, &u.Status, &u.Bio, timestamp{&u.UpdatedAt}, &u.BotToken, timestamp{&active})
+	return u, active, err
+}
 func (d *DB) StartSession(ctx context.Context, user int64, agent, ip string) (string, error) {
 	token, now := Token(), Stamp(d.Now())
 	_, err := d.Write.ExecContext(ctx, "INSERT INTO sessions(token,user_id,user_agent,ip_address,last_active_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?)", token, user, agent, ip, now, now, now)
@@ -116,6 +122,9 @@ func (d *DB) Setup(ctx context.Context, name, email, passwordDigest string, uplo
 		u = User{ID: id, Name: name, Email: email, Role: 1}
 		return err
 	})
+	if err == nil {
+		d.InvalidateAccount()
+	}
 	return u, err
 }
 func (d *DB) Rooms(ctx context.Context, user int64) ([]Room, error) { return d.rooms(ctx, user, true) }

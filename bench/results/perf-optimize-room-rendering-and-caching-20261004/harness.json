@@ -1,0 +1,29 @@
+{
+  "baseline": {
+    "ref": "main",
+    "commit": "504428addff333549f1fc88b003c7331779a3c2a"
+  },
+  "candidate": {
+    "commit": "f34e29ebbe01f9ae1919eddfe47134a2158cce28",
+    "branch": "perf-optimize-room-rendering-and-caching",
+    "uncommitted": [
+      "M bench/application"
+    ]
+  },
+  "container": {
+    "cpus_available": 8,
+    "server_cpus": "0,1,2,3",
+    "loadgen_cpus": "4,5,6,7"
+  },
+  "build_commands": {
+    "go": "python3 bin/build-assets && go build -tags sqlite_fts5 -trimpath (CGO_ENABLED=1)",
+    "go-before": "git archive 504428addff333549f1fc88b003c7331779a3c2a + bin/build equivalent"
+  },
+  "scripts_sha256": {
+    "bench/application": "6c8e3bee14b91aa6a72f85d03660e026c429f33e1d1dd80397b6e3a74bfb4b08",
+    "bench/report": "282fbf99be19269b622e29ae252c8f84bb0d4950a5fa976081b88b6a284feab2",
+    "bench/upload": "37e43d238f5432ef62fddd792326943db0df981cbf1688d4b7e017ed6b6529c1",
+    "bench/run_docker_bench.py": "a07eed16048a7afb44e32ebcfecc658b1877d9c9f877f13fcc312775a689e8a1",
+    "bin/build-assets": "e98bc60ebb77d7916490e07637ac691cd122a178bf1988760e714d5a4664c08c"
+  }
+}

@@ -66,8 +66,8 @@ func parseTemplates(secrets *rails.Secrets) (*template.Template, error) {
 		"stylesheets": func() template.HTML { return assets.Stylesheets },
 		"importmap":   func() template.HTML { return assets.Importmap },
 		"avatar": func(id int64, updated ...time.Time) string {
-			token := secrets.SignedID("User", id, "avatar", time.Time{})
-			path := fmt.Sprintf("/users/%s/avatar", token)
+			token := secrets.AvatarToken(id)
+			path := "/users/" + token + "/avatar"
 			if len(updated) > 0 && !updated[0].IsZero() {
 				path += "?v=" + updated[0].UTC().Format("20060102150405")
 			}

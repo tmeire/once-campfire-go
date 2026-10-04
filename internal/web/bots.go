@@ -307,7 +307,7 @@ func (s *Server) userJSON(r *http.Request, u database.User) userJSON {
 	} else if u.Role == 2 {
 		role = "bot"
 	}
-	return userJSON{u.ID, u.Name, role, s.origin(r) + "/users/" + s.Secrets.SignedID("User", u.ID, "avatar", time.Time{}) + "/avatar?v=" + u.UpdatedAt.UTC().Format("20060102150405")}
+	return userJSON{u.ID, u.Name, role, s.origin(r) + "/users/" + s.Secrets.AvatarToken(u.ID) + "/avatar?v=" + u.UpdatedAt.UTC().Format("20060102150405")}
 }
 func (s *Server) messageJSON(r *http.Request, m database.Message) (messageJSON, error) {
 	result := messageJSON{ID: m.ID, CreatedAt: jsonTime(m.CreatedAt), URL: fmt.Sprintf("%s/rooms/%d/messages/%d", s.origin(r), m.RoomID, m.ID)}

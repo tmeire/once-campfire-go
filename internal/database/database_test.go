@@ -85,6 +85,14 @@ func TestSessionRevocation(t *testing.T) {
 	if err != nil || got.ID != u.ID {
 		t.Fatal(got, err)
 	}
+	gotActive, active, err := d.SessionUserWithActive(ctx, token)
+	if err != nil || gotActive.ID != u.ID || active.IsZero() {
+		t.Fatalf("SessionUserWithActive failed: %v, active: %v, err: %v", gotActive, active, err)
+	}
+	refreshed, err := d.RefreshActiveSession(ctx, token, "test", "127.0.0.1", active)
+	if err != nil || refreshed {
+		t.Fatalf("recent session unexpectedly refreshed: %v, %v", refreshed, err)
+	}
 	if _, err = d.Write.Exec("UPDATE users SET status=2 WHERE id=?", u.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -107,5 +115,60 @@ func TestPendingMigrationFails(t *testing.T) {
 		t.Fatal("missing migration accepted")
 	} else if !strings.Contains(err.Error(), "pending migration") {
 		t.Fatal(err)
+	}
+}
+
+func TestAccountCachingAndInvalidation(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	if _, err := d.Setup(ctx, "Owner", "owner@test", "digest"); err != nil {
+		t.Fatal(err)
+	}
+	a1, err := d.Account(ctx)
+	if err != nil || a1.Name != "Campfire" {
+		t.Fatalf("unexpected account: %v, %v", a1, err)
+	}
+	a2, err := d.Account(ctx)
+	if err != nil || a2.Name != a1.Name {
+		t.Fatalf("cached account mismatch: %v, %v", a2, err)
+	}
+	newName := "Renamed Campfire"
+	if err := d.UpdateAccount(ctx, &newName, nil, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	a3, err := d.Account(ctx)
+	if err != nil || a3.Name != newName {
+		t.Fatalf("account invalidation failed: %v, %v", a3, err)
+	}
+}
+
+func TestAccountCacheStaleStoreRace(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	if _, err := d.Setup(ctx, "Owner", "owner@test", "digest"); err != nil {
+		t.Fatal(err)
+	}
+
+	d.InvalidateAccount()
+
+	d.AfterAccountQuery = func() {
+		d.AfterAccountQuery = nil
+		newName := "Updated During Query"
+		if err := d.UpdateAccount(ctx, &newName, nil, nil, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := d.Account(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	curr, err := d.Account(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if curr.Name != "Updated During Query" {
+		t.Fatalf("expected 'Updated During Query', got stale '%s'", curr.Name)
 	}
 }

@@ -18,14 +18,51 @@ type Account struct {
 	HasLogo                      bool
 }
 
+func (d *DB) InvalidateAccount() {
+	for {
+		curr := d.accountCache.Load()
+		var gen uint64
+		if curr != nil {
+			gen = curr.gen + 1
+		} else {
+			gen = 1
+		}
+		if d.accountCache.CompareAndSwap(curr, &accountCacheEntry{gen: gen, account: nil}) {
+			break
+		}
+	}
+}
+
 func (d *DB) Account(ctx context.Context) (Account, error) {
+	seen := d.accountCache.Load()
+	if seen != nil && seen.account != nil {
+		return *seen.account, nil
+	}
 	var a Account
 	var settings string
 	err := d.Read.QueryRowContext(ctx, "SELECT id,name,join_code,coalesce(custom_styles,''),coalesce(settings,'{}'),updated_at,EXISTS(SELECT 1 FROM active_storage_attachments WHERE record_type='Account' AND record_id=accounts.id AND name='logo') FROM accounts ORDER BY id LIMIT 1").Scan(&a.ID, &a.Name, &a.JoinCode, &a.CustomStyles, &settings, timestamp{&a.UpdatedAt}, &a.HasLogo)
+	if err != nil {
+		return Account{}, err
+	}
 	a.Settings = json.RawMessage(settings)
-	return a, err
+	if d.AfterAccountQuery != nil {
+		d.AfterAccountQuery()
+	}
+	var gen uint64
+	if seen != nil {
+		gen = seen.gen
+	}
+	d.accountCache.CompareAndSwap(seen, &accountCacheEntry{gen: gen, account: &a})
+	return a, nil
 }
 func (a Account) RestrictRooms() bool {
+	str := string(a.Settings)
+	if !strings.Contains(str, "restrict_room_creation_to_administrators") {
+		return false
+	}
+	if strings.Contains(str, `"restrict_room_creation_to_administrators":true`) || strings.Contains(str, `"restrict_room_creation_to_administrators": true`) {
+		return true
+	}
 	var s struct {
 		Restrict bool `json:"restrict_room_creation_to_administrators"`
 	}
@@ -33,6 +70,7 @@ func (a Account) RestrictRooms() bool {
 	return s.Restrict
 }
 func (d *DB) UpdateAccount(ctx context.Context, name *string, styles *string, restrict *bool, resetJoin bool, uploads ...BlobStager) error {
+	defer d.InvalidateAccount()
 	var id int64
 	return d.recordWithUpload(ctx, "Account", &id, uploads, func(tx *sql.Tx) error {
 		var settings string
@@ -259,11 +297,15 @@ func (d *DB) BannedIP(ctx context.Context, ip string) (bool, error) {
 	return n > 0, err
 }
 func (d *DB) RefreshSession(ctx context.Context, token, agent, ip string) (bool, error) {
-	now := d.Now()
 	var active time.Time
 	if err := d.Read.QueryRowContext(ctx, "SELECT last_active_at FROM sessions WHERE token=?", token).Scan(timestamp{&active}); err != nil {
 		return false, err
 	}
+	return d.RefreshActiveSession(ctx, token, agent, ip, active)
+}
+
+func (d *DB) RefreshActiveSession(ctx context.Context, token, agent, ip string, active time.Time) (bool, error) {
+	now := d.Now()
 	if !active.Before(now.Add(-time.Hour)) {
 		return false, nil
 	}

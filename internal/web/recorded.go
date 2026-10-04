@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
+	"hash"
 	"html/template"
 
 	"net/http"
@@ -18,12 +20,15 @@ import (
 
 func (s *Server) messageList(ctx context.Context, messages []database.Message) (fragmentEntry, error) {
 	var key strings.Builder
+	key.Grow(len("message-list/") + len(messages)*48)
 	key.WriteString("message-list/")
+	var buf [64]byte
 	for _, message := range messages {
-		key.WriteString(messageCacheKey(message))
+		key.Write(appendMessageCacheKey(buf[:0], message))
 		key.WriteByte('/')
 	}
-	if entry, ok := s.fragments.entry(key.String()); ok {
+	keyStr := key.String()
+	if entry, ok := s.fragments.entry(keyStr); ok {
 		return entry, nil
 	}
 	views, err := s.messageItems(ctx, messages)
@@ -35,8 +40,8 @@ func (s *Server) messageList(ctx context.Context, messages []database.Message) (
 		body.WriteString(string(view.Fragment))
 	}
 	html := template.HTML(body.String())
-	s.fragments.put(key.String(), html)
-	if entry, ok := s.fragments.entry(key.String()); ok {
+	s.fragments.put(keyStr, html)
+	if entry, ok := s.fragments.entry(keyStr); ok {
 		return entry, nil
 	}
 	return fragmentEntry{html: html, digest: sha256.Sum256([]byte(html))}, nil
@@ -75,6 +80,77 @@ func writeRecorded(w http.ResponseWriter, status int, rendered, marker string, f
 	if sw, ok := w.(*sessionWriter); ok && sw.failed {
 		return
 	}
+	target := w
+	for {
+		if buffered, ok := target.(*responseBuffer); ok {
+			buffered.parts = parts
+			return
+		}
+		if wrapper, ok := target.(interface{ Unwrap() http.ResponseWriter }); ok {
+			target = wrapper.Unwrap()
+		} else {
+			break
+		}
+	}
+	for _, part := range parts {
+		w.Write(part)
+	}
+}
+
+func writeRecordedRoom(w http.ResponseWriter, status int, shell fragmentEntry, loadedAt string, fragment fragmentEntry) {
+	payload := fragment.payload
+	if payload == nil {
+		payload = []byte(fragment.html)
+	}
+	prefix := shell.prefix
+	loadedBytes := []byte(loadedAt)
+	middle := shell.middle
+	suffix := shell.suffix
+
+	beforeLen := len(prefix) + len(loadedBytes) + len(middle)
+	afterLen := len(suffix)
+
+	if w.Header().Get("ETag") == "" {
+		h := sha256Pool.Get().(hash.Hash)
+		h.Reset()
+
+		var size [8]byte
+		binary.LittleEndian.PutUint64(size[:], uint64(beforeLen))
+		h.Write(size[:])
+
+		beforeHash := sha256Pool.Get().(hash.Hash)
+		beforeHash.Reset()
+		beforeHash.Write(prefix)
+		beforeHash.Write(loadedBytes)
+		beforeHash.Write(middle)
+		var beforeDigest [32]byte
+		beforeHash.Sum(beforeDigest[:0])
+		sha256Pool.Put(beforeHash)
+
+		h.Write(beforeDigest[:])
+
+		binary.LittleEndian.PutUint64(size[:], uint64(len(payload)))
+		h.Write(size[:])
+		h.Write(fragment.digest[:])
+
+		binary.LittleEndian.PutUint64(size[:], uint64(afterLen))
+		h.Write(size[:])
+		h.Write(shell.suffixDigest[:])
+
+		var sum [32]byte
+		h.Sum(sum[:0])
+		sha256Pool.Put(h)
+
+		w.Header().Set("ETag", "W/\""+hex.EncodeToString(sum[:16])+"\"")
+	}
+	if w.Header().Get("Cache-Control") == "" {
+		w.Header().Set("Cache-Control", "max-age=0, private, must-revalidate")
+	}
+	w.WriteHeader(status)
+	if sw, ok := w.(*sessionWriter); ok && sw.failed {
+		return
+	}
+	parts := [][]byte{prefix, loadedBytes, middle, payload, suffix}
 	target := w
 	for {
 		if buffered, ok := target.(*responseBuffer); ok {

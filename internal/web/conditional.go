@@ -1,12 +1,15 @@
 package web
 
 import (
-	"crypto/sha256"
-	"fmt"
-	"github.com/basecamp/once-campfire-go/internal/database"
+	"bytes"
+	"encoding/hex"
+	"hash"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/basecamp/once-campfire-go/internal/database"
 )
 
 func notModified(w http.ResponseWriter, r *http.Request, etag string, modified time.Time) bool {
@@ -33,21 +36,36 @@ func notModified(w http.ResponseWriter, r *http.Request, etag string, modified t
 	return fresh
 }
 func messageFreshness(w http.ResponseWriter, r *http.Request, messages []database.Message) bool {
-	parts := make([]string, 0, len(messages)+2)
+	h := sha256Pool.Get().(hash.Hash)
+	h.Reset()
+	defer sha256Pool.Put(h)
+
+	var buf [64]byte
 	var modified time.Time
 	for _, m := range messages {
-		parts = append(parts, fmt.Sprintf("messages/%d-%s", m.ID, m.UpdatedAt.UTC().Format("20060102150405.000000")))
-		parts[len(parts)-1] = strings.ReplaceAll(parts[len(parts)-1], ".", "")
+		b := append(buf[:0], "messages/"...)
+		b = strconv.AppendInt(b, m.ID, 10)
+		b = append(b, '-')
+		start := len(b)
+		b = m.UpdatedAt.UTC().AppendFormat(b, "20060102150405.000000")
+		dot := bytes.IndexByte(b[start:], '.')
+		if dot != -1 {
+			copy(b[start+dot:], b[start+dot+1:])
+			b = b[:len(b)-1]
+		}
+		b = append(b, '/')
+		h.Write(b)
 		if m.UpdatedAt.After(modified) {
 			modified = m.UpdatedAt
 		}
 	}
 	if r.Header.Get("Turbo-Frame") != "" {
-		parts = append(parts, "frame")
+		h.Write([]byte("frame/"))
 	}
-	parts = append(parts, "messages/index")
-	hash := sha256.Sum256([]byte(strings.Join(parts, "/")))
-	etag := fmt.Sprintf("W/\"%x\"", hash[:16])
+	h.Write([]byte("messages/index"))
+	var digest [32]byte
+	h.Sum(digest[:0])
+	etag := "W/\"" + hex.EncodeToString(digest[:16]) + "\""
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Last-Modified", modified.UTC().Format(http.TimeFormat))
 	w.Header().Set("Cache-Control", "max-age=0, private, must-revalidate")
